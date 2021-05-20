@@ -2,8 +2,9 @@ from yolo.centroidtracker import CentroidTracker
 from yolo.trackableobject import TrackableObject
 import argparse
 import cv2 as cv
-
-
+import numpy as np
+import os
+import dlib
 
 def Argument_Parser():
     ap = argparse.ArgumentParser()
@@ -25,8 +26,8 @@ def Argument_Parser():
 # Initialize the parameters
 confThreshold = 0.6  # Confidence threshold
 nmsThreshold = 0.4  # Non-maximum suppression threshold
-# inpWidth = 416  # Width of network's input image
-# inpHeight = 416  # Height of network's input image
+inpWidth = 416  # Width of network's input image
+inpHeight = 416  # Height of network's input image
 
 parser = argparse.ArgumentParser(description='Object Detection using YOLO in OPENCV')
 
@@ -100,52 +101,132 @@ def drawPred(classId, conf, left, top, right, bottom):
 
 
 # Remove the bounding boxes with low confidence using non-maxima suppression
-def postprocess(frame, outs):
+def postprocess(frame, detections):
     frameHeight = frame.shape[0]
     frameWidth = frame.shape[1]
 
     rects = []
+    CLASSES= [ "person","bicycle","car","motorbike","aeroplane","toothbrush"]
+# bus
+# train
+# truck
+# boat
+# traffic light
+# fire hydrant
+# stop sign
+# parking meter
+# bench
+# bird
+# cat
+# dog
+# horse
+# sheep
+# cow
+# elephant
+# bear
+# zebra
+# giraffe
+# backpack
+# umbrella
+# handbag
+# tie
+# suitcase
+# frisbee
+# skis
+# snowboard
+# sports ball
+# kite
+# baseball bat
+# baseball glove
+# skateboard
+# surfboard
+# tennis racket
+# bottle
+# wine glass
+# cup
+# fork
+# knife
+# spoon
+# bowl
+# banana
+# apple
+# sandwich
+# orange
+# broccoli
+# carrot
+# hot dog
+# pizza
+# donut
+# cake
+# chair
+# sofa
+# pottedplant
+# bed
+# diningtable
+# toilet
+# tvmonitor
+# laptop
+# mouse
+# remote
+# keyboard
+# cell phone
+# microwave
+# oven
+# toaster
+# sink
+# refrigerator
+# book
+# clock
+# vase
+# scissors
+# teddy bear
+# hair drier
 
     # Scan through all the bounding boxes output from the network and keep only the
     # ones with high confidence scores. Assign the box's class label as the class with the highest score.
-    classIds = []
-    confidences = []
-    boxes = []
-    for out in outs:
-        for detection in out:
-            scores = detection[5:]
-            classId = np.argmax(scores)
-            confidence = scores[classId]
-            if confidence > confThreshold:
-                center_x = int(detection[0] * frameWidth)
-                center_y = int(detection[1] * frameHeight)
-                width = int(detection[2] * frameWidth)
-                height = int(detection[3] * frameHeight)
-                left = int(center_x - width / 2)
-                top = int(center_y - height / 2)
-                classIds.append(classId)
-                confidences.append(float(confidence))
-                boxes.append([left, top, width, height])
+    for i in np.arange(0, detections.shape[2]):
+        # extract the confidence (i.e., probability) associated
+        # with the prediction
+        confidence = detections[0, 0, i, 2]
 
-    # Perform non maximum suppression to eliminate redundant overlapping boxes with
-    # lower confidences.
-    indices = cv.dnn.NMSBoxes(boxes, confidences, confThreshold, nmsThreshold)
-    for i in indices:
-        i = i[0]
-        box = boxes[i]
-        left = box[0]
-        top = box[1]
-        width = box[2]
-        height = box[3]
-        # Class "person"
-        if classIds[i] == 0:
-            rects.append((left, top, left + width, top + height))
-            # use the centroid tracker to associate the (1) old object
-            # centroids with (2) the newly computed object centroids
-            objects = ct.update(rects)
-            counting(objects)
+        # filter out weak detections by requiring a minimum
+        # confidence
+        if confidence > args["confidence"]:
+            # extract the index of the class label from the
+            # detections list
+            idx = int(detections[0, 0, i, 1])
 
-            # drawPred(classIds[i], confidences[i], left, top, left + width, top + height)
+            # if the class label is not a person, ignore it
+            if CLASSES[idx] != "person":
+                continue
+
+            # compute the (x, y)-coordinates of the bounding box
+            # for the object
+            box = detections[0, 0, i, 3:7] * np.array([W, H, W, H])
+            (startX, startY, endX, endY) = box.astype("int")
+
+            # construct a dlib rectangle object from the bounding
+            # box coordinates and then start the dlib correlation
+            # tracker
+            tracker = dlib.correlation_tracker()
+            rect = dlib.rectangle(startX, startY, endX, endY)
+            tracker.start_track(rgb, rect)
+
+            # add the tracker to our list of trackers so we can
+            # utilize it during skip frames
+            trackers.append(tracker)
+
+    for tracker in trackers:
+        pos = tracker.get_position()
+        startX = int(pos.left())
+        startY = int(pos.top())
+        endX = int(pos.right())
+        endY = int(pos.bottom())
+    rects.append((startX, startY, endX, endY))
+    objects = ct.update(rects)
+    counting(objects)
+
+        # drawPred(classIds[i], confidences[i], left, top, left + width, top + height)
 
 
 def counting(objects):
