@@ -43,6 +43,8 @@ def Detector(args):
         print("[INFO] loading model...")
         net = cv2.dnn.readNetFromDarknet(modelConfiguration, modelWeights)
         # net.setPreferableBackend(cv.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
 
         if not args.get("input", False):
             print("[INFO] starting video stream...")
@@ -58,9 +60,9 @@ def Detector(args):
 
         if not os.path.exists(args.get("datapath")):
             print("Creating a new csv file")
-            with open(args.get("datapath"), 'w') as csvfile:
-                wrt = csv.writer(csvfile)
-                wrt.writerow(["Metric", "Time", "IN/OUT", "Total In", "Total Out"])
+            # with open(args.get("datapath"), 'w') as csvfile:
+            #     wrt = csv.writer(csvfile)
+            #     wrt.writerow(["Metric", "Time", "IN/OUT", "Total In", "Total Out"])
         # initialize the video writer (we'll instantiate later if need be)
         writer = None
 
@@ -118,7 +120,7 @@ def Detector(args):
 
             # check to see if we should run a more computationally expensive
             # object detection method to aid our tracker
-            if totalFrames % args["skip_frames"] == 0:
+            if totalFrames % 10 == 0:
                 # set the status and initialize our new set of object trackers
                 status = "Detecting"
                 trackers = []
@@ -126,56 +128,78 @@ def Detector(args):
 
                 # convert the frame to a blob and pass the blob through the
                 # network and obtain the detections
-                blob = cv2.dnn.blobFromImage(frame, 0.007843, (W, H), 127.5)
+                blob = cv2.dnn.blobFromImage(frame, 1 / 255, (416, 416), [0, 0, 0], 1, crop=False)
                 net.setInput(blob)
-                detections = net.forward()
-                print(detections)
+
+
+                layersNames = net.getLayerNames()
+                # Get the names of the output layers, i.e. the layers with unconnected outputs
+                forward = [layersNames[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+                outs = net.forward(forward)
                 # loop over the detections
-                for detection in detections:
-                    scores = detection[5:]
-                    classId = np.argmax(scores)
-                    confidence = scores[classId]
-                    classIds = []
-                    confidences = []
-                    boxes = []
-                    if confidence > 0.6:
-                        print(detection)
-                        dete = (detection[1], detection[2], detection[3], detection[0])
-                        # det.append(dete)
-                        center_x = int(detection[1] * frameWidth)
-                        print(center_x)
-                        center_y = int(detection[2] * frameHeight)
-                        print(center_y)
-                        width = int(detection[3] * frameWidth)
-                        print(width)
-                        height = int(detection[0] * frameHeight)
-                        print(height)
-                        left = int(center_x - width / 2)
-                        top = int(center_y - height / 2)
-                        classIds.append(classId)
-                        confidences.append(float(confidence))
-                        boxes.append([left, top, width, height])
+                frameHeight = 500
+                frameWidth = 500
+                frame = imutils.resize(frame, width=500)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                rects = []
+
+                # Scan through all the bounding boxes output from the network and keep only the
+                # ones with high confidence scores. Assign the box's class label as the class with the highest score.
+                classIds = []
+                confidences = []
+                boxes = []
+                det = []
+                for out in outs:
+                    # print(out)
+                    for detection in out:
+                        scores = detection[5:]
+                        classId = np.argmax(scores)
+                        confidence = scores[classId]
+
+                        if confidence > 0.6:
+                            # print(detection)
+                            dete = (detection[1], detection[2], detection[3], detection[0])
+                            det.append(dete)
+                            center_x = int(detection[0] * frameWidth)
+                            print(center_x)
+                            center_y = int(detection[1] * frameHeight)
+                            print(center_y)
+                            width = int(detection[2] * frameWidth)
+                            print(width)
+                            height = int(detection[3] * frameHeight)
+                            print(height)
+                            left = int(center_x - width / 2)
+                            top = int(center_y - height / 2)
+                            classIds.append(classId)
+                            confidences.append(float(confidence))
+                            boxes.append([left, top, width, height])
 
             # Perform non maximum suppression to eliminate redundant overlapping boxes with
             # lower confidences.
 
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.6, 0.4)
-            for i in indices:
-                print(i[0])
-                i = i[0]
-                box = boxes[i]
-                print(box)
-                left = box[0]
-                top = box[1]
-                width = box[2]
-                height = box[3]
-                tracker = dlib.correlation_tracker()
-                rect = dlib.rectangle(left, top, width, height)
-                print(rect)
-                print(rgb)
-                tracker.start_track(rgb, rect)
+                indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.6, 0.4)
+                for i in indices:
+                    print(i[0])
+                    i = i[0]
+                    box = boxes[i]
+                #print(box)
+                    left = box[0]
+                    top = box[1]
+                    width = box[2]
+                    height = box[3]
+
                 # Class "person"
-                if classIds[i] == 0:
+                    if classIds[i] == 0:
+                        print('person')
+                        tracker = dlib.correlation_tracker()
+                        rect = dlib.rectangle(left, top, width + left, height + top)
+                        # print(rect)
+                        # print(rgb)
+                        tracker.start_track(rgb, rect)
+                        trackers.append(tracker)
+            else:
+                for tracker in trackers:
+                    status ="Tracking"
                     tracker.update(rgb)
                     pos = tracker.get_position()
 
@@ -190,127 +214,79 @@ def Detector(args):
 
                     # use the centroid tracker to associate the (1) old object
                     # centroids with (2) the newly computed object centroids
-                    objects = ct.update(rects)
-                    counting(objects)
+            objects = ct.update(rects)
+            for (objectID, centroid) in objects.items():
+                        # check to see if a trackable object exists for the current
+                        # object ID
+                to = trackableObjects.get(objectID, None)
+
+                        # if there is no existing trackable object, create one
+                if to is None:
+                    to = TrackableObject(objectID, centroid)
+
+                        # otherwise, there is a trackable object so we can utilize it
+                        # to determine direction
+                else:
+                            # the difference between the y-coordinate of the *current*
+                            # centroid and the mean of *previous* centroids will tell
+                            # us in which direction the object is moving (negative for
+                            # 'up' and positive for 'down')
+                    y = [c[1] for c in to.centroids]
+                    direction = centroid[1] - np.mean(y)
+                    to.centroids.append(centroid)
+
+                            # check to see if the object has been counted or not
+                    if not to.counted:
+                                # if the direction is negative (indicating the object
+                                # is moving up) AND the centroid is above the center
+                                # line, count the object
+                        if direction < 0 and centroid[1] < H // 2:
+                            totalUp += 1
+                            to.counted = True
+                                        #                                 with open(args.get("datapath"), "a", newline='') as csvfile:
+                                        # row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "Out", totalDown, totalUp]
+                                        # data_dict = {'Metric': "TC",
+                                        #              'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        #              'In/Out': "OUT", 'Total In': totalUp, 'Total Out': totalDown}
+                                        # # row = [datetime.now(), "Out", totalDown, totalUp, totalDown - totalUp]
+                                        # # mqttc.publish(topic, json.dumps(data_dict))
+                                        # wrt = csv.writer(csvfile)
+                                        # wrt.writerow(row)
+                                    # writer.write
+
+
+                                # if the direction is positive (indicating the object
+                                # is moving down) AND the centroid is below the
+                                # center line, count the object
+                        elif direction > 0 and centroid[1] > H // 2:
+                            totalDown += 1
+                            to.counted = True
+                                    # with open(args.get("datapath"), "a", newline='') as csvfile:
+                                    #     # row = [datetime.now(), "IN", totalDown, totalUp, totalDown - totalUp]
+                                    #     row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "In", totalDown, totalUp]
+                                    #     data_dict = {'Metric': "TC",
+                                    #                  'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                    #                  'In/Out': "In", 'Total In': totalUp, 'Total Out': totalDown}
+                                    #     # mqttc.publish(topic, json.dumps(data_dict))
+                                    #     wrt = csv.writer(csvfile)
+                                    #
+                                    #     wrt.writerow(row)
+
+
 
             # otherwise, we should utilize our object *trackers* rather than
             # object *detectors* to obtain a higher frame processing throughput
-            else:
-                # loop over the trackers
-                for tracker in trackers:
-                    # set the status of our system to be 'tracking' rather
-                    # than 'waiting' or 'detecting'
-                    status = "Tracking"
 
-                    # update the tracker and grab the updated position
-                    tracker.update(rgb)
-                    pos = tracker.get_position()
-
-                    # unpack the position object
-                    startX = int(pos.left())
-                    startY = int(pos.top())
-                    endX = int(pos.right())
-                    endY = int(pos.bottom())
-
-                    # add the bounding box coordinates to the rectangles list
-                    rects.append((startX, startY, endX, endY))
 
             # draw a horizontal line in the center of the frame -- once an
             # object crosses this line we will determine whether they were
             # moving 'up' or 'down'
-            cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
-            cv2.line(frame, (W // 2, H), (W // 2, 0), (0, 255, 255), 2)
+                cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
+                cv2.line(frame, (W // 2, H), (W // 2, 0), (0, 255, 255), 2)
 
             # use the centroid tracker to associate the (1) old object
             # centroids with (2) the newly computed object centroids
-            objects = ct.update(rects)
 
-            # loop over the tracked objects
-            for (objectID, centroid) in objects.items():
-                # check to see if a trackable object exists for the current
-                # object ID
-                to = trackableObjects.get(objectID, None)
-
-                # if there is no existing trackable object, create one
-                if to is None:
-                    to = TrackableObject(objectID, centroid)
-
-                # otherwise, there is a trackable object so we can utilize it
-                # to determine direction
-                else:
-                    # the difference between the y-coordinate of the *current*
-                    # centroid and the mean of *previous* centroids will tell
-                    # us in which direction the object is moving (negative for
-                    # 'up' and positive for 'down')
-                    y = [c[1] for c in to.centroids]
-                    direction = centroid[1] - np.mean(y)
-                    to.centroids.append(centroid)
-                    x = [c[0] for c in to.centroids]
-                    vertical = centroid[0] - np.mean(x)
-
-                    # check to see if the object has been counted or not
-                    if not to.counted:
-                        # if the direction is negative (indicating the object
-                        # is moving up) AND the centroid is above the center
-                        # line, count the object
-                        if direction < 0 and centroid[1] < H // 2:
-                            totalUp += 1
-                            with open(args.get("datapath"), "a", newline='') as csvfile:
-                                row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "Out", totalDown, totalUp]
-                                data_dict = {'Metric': "TC", 'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                             'In/Out': "OUT", 'Total In': totalUp, 'Total Out': totalDown}
-                                # row = [datetime.now(), "Out", totalDown, totalUp, totalDown - totalUp]
-                                # mqttc.publish(topic, json.dumps(data_dict))
-                                wrt = csv.writer(csvfile)
-                                wrt.writerow(row)
-                            # writer.write
-                            to.counted = True
-
-                        # if the direction is positive (indicating the object
-                        # is moving down) AND the centroid is below the
-                        # center line, count the object
-                        elif direction > 0 and centroid[1] > H // 2:
-                            totalDown += 1
-                            with open(args.get("datapath"), "a", newline='') as csvfile:
-                                # row = [datetime.now(), "IN", totalDown, totalUp, totalDown - totalUp]
-                                row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "In", totalDown, totalUp]
-                                data_dict = {'Metric': "TC", 'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                             'In/Out': "In", 'Total In': totalUp, 'Total Out': totalDown}
-                                # mqttc.publish(topic, json.dumps(data_dict))
-                                wrt = csv.writer(csvfile)
-
-                                wrt.writerow(row)
-
-                            to.counted = True
-                        elif vertical < 0 and centroid[0] < W // 2:
-                            left += 1
-                            with open(args.get("datapath"), "a", newline='') as csvfile:
-                                row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "Out", totalDown, totalUp]
-                                data_dict = {'Metric': "TC", 'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                             'In/Out': "OUT", 'Total In': totalUp, 'Total Out': totalDown}
-                                # row = [datetime.now(), "Out", totalDown, totalUp, totalDown - totalUp]
-                                # mqttc.publish(topic, json.dumps(data_dict))
-                                wrt = csv.writer(csvfile)
-                                wrt.writerow(row)
-                            # writer.write
-                            to.counted = True
-
-                        # if the direction is positive (indicating the object
-                        # is moving down) AND the centroid is below the
-                        # center line, count the object
-                        elif vertical > 0 and centroid[0] > W // 2:
-                            right += 1
-                            with open(args.get("datapath"), "a", newline='') as csvfile:
-                                # row = [datetime.now(), "IN", totalDown, totalUp, totalDown - totalUp]
-                                row = ["tc", str(time.strftime("%Y/%m/%d %H:%M:%S")), "In", totalDown, totalUp]
-                                data_dict = {'Metric': "TC", 'Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                             'In/Out': "In", 'Total In': totalUp, 'Total Out': totalDown}
-                                # mqttc.publish(topic, json.dumps(data_dict))
-                                wrt = csv.writer(csvfile)
-
-                                wrt.writerow(row)
-
-                            to.counted = True
 
                 # store the trackable object in our dictionary
                 trackableObjects[objectID] = to
@@ -327,8 +303,7 @@ def Detector(args):
             info = [
                 ("Out ", totalUp),
                 ("In", totalDown),
-                ("Left", left),
-                ("Right", right),
+
                 ("Status", status),
             ]
 
@@ -381,7 +356,7 @@ def Detector(args):
         # Publish a message
         mqttc.publish(topic, "my message")
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
         ap = Argument_Parser()
         Detector(ap)
         print('ok')
