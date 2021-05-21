@@ -5,6 +5,7 @@ import cv2 as cv
 import numpy as np
 import os.path
 import dlib
+import imutils
 
 def Argument_Parser():
     ap = argparse.ArgumentParser()
@@ -104,9 +105,10 @@ def drawPred(classId, conf, left, top, right, bottom):
 
 # Remove the bounding boxes with low confidence using non-maxima suppression
 def postprocess(frame, outs):
-    frameHeight = frame.shape[0]
-    frameWidth = frame.shape[1]
-
+    frameHeight = 500
+    frameWidth = 500
+    frame = imutils.resize(frame, width=500)
+    rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
     rects = []
 
     # Scan through all the bounding boxes output from the network and keep only the
@@ -114,16 +116,26 @@ def postprocess(frame, outs):
     classIds = []
     confidences = []
     boxes = []
+    det=[]
     for out in outs:
+        print(out)
         for detection in out:
             scores = detection[5:]
             classId = np.argmax(scores)
             confidence = scores[classId]
+
             if confidence > confThreshold:
-                center_x = int(detection[0] * frameWidth)
-                center_y = int(detection[1] * frameHeight)
-                width = int(detection[2] * frameWidth)
-                height = int(detection[3] * frameHeight)
+                print(detection)
+                dete = (detection[1],detection[2],detection[3],detection[0])
+                det.append(dete)
+                center_x = int(detection[1] * frameWidth)
+                print(center_x)
+                center_y = int(detection[2] * frameHeight)
+                print(center_y)
+                width = int(detection[3] * frameWidth)
+                print(width)
+                height = int(detection[0] * frameHeight)
+                print(height)
                 left = int(center_x - width / 2)
                 top = int(center_y - height / 2)
                 classIds.append(classId)
@@ -132,17 +144,36 @@ def postprocess(frame, outs):
 
     # Perform non maximum suppression to eliminate redundant overlapping boxes with
     # lower confidences.
+
     indices = cv.dnn.NMSBoxes(boxes, confidences, confThreshold, nmsThreshold)
     for i in indices:
+        print(i[0])
         i = i[0]
         box = boxes[i]
+        print(box)
         left = box[0]
         top = box[1]
         width = box[2]
         height = box[3]
+        tracker = dlib.correlation_tracker()
+        rect = dlib.rectangle(left, top, width, height)
+        print(rect)
+        print(rgb)
+        tracker.start_track(rgb, rect)
         # Class "person"
         if classIds[i] == 0:
-            rects.append((left, top, left + width, top + height))
+            tracker.update(rgb)
+            pos = tracker.get_position()
+
+            # unpack the position object
+            startX = int(pos.left())
+            startY = int(pos.top())
+            endX = int(pos.right())
+            endY = int(pos.bottom())
+
+            # add the bounding box coordinates to the rectangles list
+            rects.append((startX, startY, endX, endY))
+
             # use the centroid tracker to associate the (1) old object
             # centroids with (2) the newly computed object centroids
             objects = ct.update(rects)
